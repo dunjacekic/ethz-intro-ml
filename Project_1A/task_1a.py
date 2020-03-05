@@ -1,53 +1,47 @@
 import numpy as np
 import pandas as pd
-
 from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import KFold
 
 
-def read_data(fold):
+def read_data():
     """ Read and split data """
 
     # Read training data to csv file
     train_data = pd.read_csv('train.csv').drop('Id', axis=1)
 
-    # Get length of data & fold
+    # Get length of data
     data_len = train_data.shape[0]
-    fold_len = round(data_len / fold)
 
-    # Split the data into folds
-    y_folds = []
-    x_folds = []
-    for i in range(fold):
+    x_data = train_data.iloc[:, 1:].to_numpy()
+    y_data = train_data['y'].to_numpy()
 
-        data_range = range(i * fold_len, min((i + 1) * fold_len, data_len))
-
-        y_folds.append(
-            train_data['y'].iloc[data_range].to_numpy())
-        x_folds.append(train_data.iloc[data_range, 1:].to_numpy())
-
-    return x_folds, y_folds
+    return x_data, y_data, data_len
 
 
 def main():
 
     fold = 10
-    reps = 10
     lambdas = np.array([0.01, 0.1, 1, 10, 100])
 
-    x_folds, y_folds = read_data(fold)
+    x_data, y_data, data_len = read_data()
 
     R = pd.DataFrame(index=lambdas, columns=range(fold))
 
+    kf = KFold(n_splits=fold)
+
     for lm in lambdas:
 
-        for idx in range(reps):
+        idx = 0
+
+        for train_idx, test_idx in kf.split(x_data):
 
             # Split into two groups
-            x_test = x_folds[idx]
-            y_test = y_folds[idx]
+            x_test = x_data[test_idx, :]
+            y_test = y_data[test_idx]
 
-            x_train = np.concatenate(x_folds[:idx] + x_folds[idx + 1:], axis=0)
-            y_train = np.concatenate(y_folds[:idx] + y_folds[idx + 1:], axis=0)
+            x_train = x_data[train_idx, :]
+            y_train = y_data[train_idx]
 
             # Train and compute w
             w = np.linalg.inv(
@@ -59,6 +53,7 @@ def main():
 
             # Loss
             R[idx].loc[lm] = np.sqrt(mean_squared_error(y_test, y_pred))
+            idx += 1
 
     # Find mean of each lambda
     R_mean = R.mean(axis=1)
