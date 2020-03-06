@@ -18,6 +18,16 @@ def read_data():
     return x_data, y_data
 
 
+def standardize_x(x_data):
+    """ Standardize x """
+
+    scaler = StandardScaler()
+    scaler.fit(x_data)
+    x_data_std = scaler.transform(x_data)
+
+    return x_data_std
+
+
 def main():
 
     # Constants
@@ -26,11 +36,6 @@ def main():
 
     # read data
     x_data, y_data = read_data()
-
-    # Standardize x
-    scaler = StandardScaler()
-    scaler.fit(x_data)
-    x_data = scaler.transform(x_data)
 
     # Empty loss function
     R = pd.DataFrame(index=lambdas, columns=range(fold))
@@ -51,6 +56,10 @@ def main():
             y_test = y_data[test_idx]
             x_train = x_data[train_idx, :]
             y_train = y_data[train_idx]
+
+            # Standardize x
+            x_test = standardize_x(x_test)
+            x_train = standardize_x(x_train)
 
             # Train and compute w
             reg = Ridge(lm)
