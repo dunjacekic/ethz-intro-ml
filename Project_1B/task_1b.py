@@ -1,8 +1,7 @@
 import numpy as np
 import pandas as pd
 from sklearn import linear_model
-from sklearn.metrics import mean_squared_error
-from sklearn.model_selection import KFold
+from sklearn.preprocessing import StandardScaler
 
 
 def read_data():
@@ -18,11 +17,13 @@ def read_data():
 
 
 def get_features(x_data):
-    """ Get full feature set """
+    """ Get full feature set and standardize """
+
+    x_data_list = [x_data, x_data ** 2, np.exp(x_data), np.cos(x_data),
+                   np.ones((x_data.shape[0], 1))]
 
     x_data_out = np.concatenate(
-        [x_data, x_data ** 2, np.exp(x_data), np.cos(x_data),
-         np.ones((x_data.shape[0], 1))], axis=1)
+        x_data_list, axis=1)
 
     return x_data_out
 
@@ -36,9 +37,11 @@ def main():
     x_data_all = get_features(x_data)
 
     # Ridge regression with built-in cv
-    reg = linear_model.LassoCV(
-        alphas=np.logspace(-3, 3, 121),
-        cv=10).fit(x_data_all, y_data)
+    reg = linear_model.RidgeCV(
+        alphas=np.logspace(-2, 2, 201),
+        cv=5).fit(x_data_all, y_data)
+
+    print(reg.alpha_)
 
     # Write to file
     np.savetxt('solution.csv', reg.coef_.transpose())
