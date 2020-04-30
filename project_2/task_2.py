@@ -2,12 +2,8 @@ import os
 
 import numpy as np
 import pandas as pd
-from sklearn.impute import MissingIndicator, SimpleImputer
-from sklearn.linear_model import LinearRegression, RidgeCV
-from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import KFold
-from sklearn.pipeline import FeatureUnion, make_pipeline
-from sklearn.svm import SVC
+from scipy.interpolate import interp1d
+from sklearn.linear_model import RidgeCV, LogisticRegression
 
 
 def read_data():
@@ -26,82 +22,75 @@ def read_data():
 def process_features(features, data_col, new_col):
     """ Process features, create BoW for each feature """
 
+    features_full = features.copy()
     X = pd.DataFrame(columns=new_col)
 
-    # Separate different patients
+    # Get medians of each column for imputation
+    median_col = data_col[3:]
+    median = pd.DataFrame(columns=median_col)
+
+    new_row = []
+
+    for col in median_col:
+        new_row.append(features[col].loc[features[col].notnull()].median())
+
+    median.loc[0] = list(new_row)
+
     for pid in range(int(features['pid'].count() / 12)):
 
-        raw_X = features.iloc[pid * 12: (pid + 1) * 12]
+        row = range(pid * 12, (pid + 1) * 12)
 
-        # Process each column
-        new_row = [raw_X['Age'].iloc[0]]
-        for col in data_col[3:]:
+        # Normalize time
+        time = features['Time'].iloc[row]
+        time = time - time.iloc[0]
 
-            # Count and remove NaN
-            new_X = raw_X[['Time', col]].dropna()
-            real_count = new_X['Time'].count()
+        # Impute patient data
+        for col in median_col:
 
-            if real_count < 5:
+            real_count = features[col].iloc[row].count()
 
-                # If not enough elements
-                new_row.extend([np.nan, np.nan, np.mean(
-                    new_X[col]), np.std(new_X[col])])
+            if real_count == 0:
+
+                for i in row:
+                    features_full[col].iloc[i] = median[col].to_numpy()
+
+            elif real_count == 1:
+
+                real_idx = features[col].iloc[row].notnull()
+                features_full[col].iloc[row] = features[col].iloc[row].to_numpy()[
+                    real_idx][0]
+
+            elif real_count < 4:
+
+                real_idx = features[col].iloc[row].notnull()
+                x = time.to_numpy()[real_idx]
+                y = features[col].iloc[row].to_numpy()[real_idx]
+                f = interp1d(x, y, kind='nearest', fill_value='extrapolate')
+                features_full[col].iloc[row] = f(range(12))
 
             else:
 
-                # If enough
-                Reg = LinearRegression().fit(
-                    new_X['Time'].to_numpy().reshape(-1, 1), new_X[col].to_numpy().reshape(-1, 1))
+                real_idx = features[col].iloc[row].notnull()
+                x = time.to_numpy()[real_idx]
+                y = features[col].iloc[row].to_numpy()[real_idx]
+                f = interp1d(x, y, kind='linear', fill_value='extrapolate')
+                features_full[col].iloc[row] = f(range(12))
 
-                new_row.extend(
-                    [Reg.coef_[0][0], Reg.intercept_[0], np.mean(
-                        new_X[col]), np.std(new_X[col])])
-
+        new_row = [features['pid'].iloc[row[0]], features['Age'].iloc[row[0]]
+                   ] + list(features_full.iloc[row, 3:].to_numpy().flatten())
         X.loc[pid] = new_row
 
     return X
 
 
-def subtask_12(X, test_X, transformer, train_labels, label, N_C, n_splits):
+def subtask_12(X, test_X, train_labels, label, N_C, n_splits):
     """ Nested Function for subtask 1 & 2"""
 
     y = train_labels[label].to_numpy()
 
-    # Initialize variables
-    C_list = np.logspace(-2, 2, N_C)
-    score_12 = []
+    clf = LogisticRegression(max_iter=50000).fit(X, y)
+    print('Score is: %.3f\n' % clf.score(X, y))
 
-    # Cross validation on regularizaiton C
-    for C in C_list:
-
-        C_score = []
-
-        # K-Fold split
-        kf = KFold(n_splits)
-        for train_idx, test_idx in kf.split(X):
-            X_train, X_test = X[train_idx], X[test_idx]
-            y_train, y_test = y[train_idx], y[test_idx]
-
-            # Make pipeline and fit
-            clf = make_pipeline(transformer, SVC(
-                C=C, kernel='sigmoid', probability=True))
-            clf = clf.fit(X_train, y_train)
-
-            # Prediction and scoring
-            y_pred = clf.predict_proba(X_test)
-            C_score.append(roc_auc_score(y_test, y_pred[:, 1]))
-
-        score_12.append(np.mean(C_score))
-
-    # Find best regularizer
-    best_C = C_list[score_12.index(max(score_12))]
-
-    # Fit test data
-    clf = make_pipeline(transformer, SVC(
-        C=best_C, kernel='sigmoid', probability=True))
-    clf = clf.fit(X, y)
-
-    # return clf.predict_proba(test_X)[:, 1]
     return {label: clf.predict_proba(test_X)[:, 1]}
 
 
@@ -112,9 +101,9 @@ def main():
     # Columns
     data_col = train_features.columns
 
-    new_col = ['Age']
+    new_col = ['pid', 'Age']
     for col in data_col[3:]:
-        new_col.extend([col + '_w', col + '_b', col + '_mean', col + '_std'])
+        new_col.extend([col + '_' + str(t) for t in range(12)])
 
     # Process features, cache files for future use
     if 'train_X.csv' in os.listdir() and 'test_X.csv' in os.listdir():
@@ -133,12 +122,6 @@ def main():
     train_labels = train_labels.iloc[:, 1:]
     test_pid = test_features['pid'].iloc[0::12].to_numpy().astype(int)
     test_features = test_features.iloc[:, 1:]
-
-    # Imputations with marking
-    transformer = FeatureUnion(transformer_list=[
-        ('features', SimpleImputer(strategy='median')),
-        ('indicators', MissingIndicator(missing_values=np.nan, features="all"))
-    ])
 
     # Initialize output data frame
     y_out = pd.DataFrame({'pid': test_pid})
@@ -159,7 +142,7 @@ def main():
 
     for label in labels:
         y_12 = pd.DataFrame(subtask_12(
-            X, test_X, transformer, train_labels, label, N_C, n_splits))
+            X, test_X, train_labels, label, N_C, n_splits))
 
         y_out[label] = y_12
 
@@ -173,8 +156,7 @@ def main():
     N_a = 7
 
     # Ridge Regression
-    reg = make_pipeline(transformer, RidgeCV(
-        alphas=np.logspace(-3, 3, N_a), cv=n_splits))
+    reg = RidgeCV(alphas=np.logspace(-3, 3, N_a), cv=n_splits)
     reg = reg.fit(X, y)
     y_out = pd.concat([y_out, pd.DataFrame(
         data=reg.predict(test_X), columns=labels)], axis=1)
