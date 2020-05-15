@@ -9,12 +9,11 @@ IMG_HEIGHT = 32
 
 
 def load_image(img):
-    # convert the compressed string to a 3D uint8 tensor
     img = tf.image.decode_jpeg(img, channels=3)
-    # Use `convert_image_dtype` to convert to floats in the [0,1] range.
-    img = tf.image.convert_image_dtype(img, tf.float32)
-    # resize the image to the desired size.
-    return tf.image.resize(img, [IMG_WIDTH, IMG_HEIGHT])
+    img = tf.cast(img, tf.float32)
+    img = tf.image.resize(img, (IMG_HEIGHT, IMG_WIDTH))
+    img = tf.keras.applications.resnet_v2.preprocess_input(img)
+    return img
 
 
 def load_triplets(triplet):
@@ -26,9 +25,11 @@ def load_triplets(triplet):
 
 
 def create_model(freeze=True):
+    resnet_weights_path = 'resnet50v2_weights_tf_dim_ordering_tf_kernels_notop.h5'
     inputs = tf.keras.Input(shape=(3, IMG_HEIGHT, IMG_WIDTH, 3))
     encoder = tf.keras.applications.ResNet50V2(
-        include_top=False, input_shape=(IMG_HEIGHT, IMG_WIDTH, 3))
+        include_top=False, input_shape=(IMG_HEIGHT, IMG_WIDTH, 3),
+        weights=resnet_weights_path)
     encoder.trainable = not freeze
     # encoder = tf.keras.models.Sequential()
     # encoder.add(tf.keras.layers.Conv2D(32, (3, 3), padding='same', activation='relu'))
