@@ -25,19 +25,24 @@ def load_triplets(triplet):
     return tf.stack([a, b, c], axis=0), tf.strings.to_number(ids[3])
 
 
-def create_model():
+def create_model(freeze=True):
     inputs = tf.keras.Input(shape=(3, IMG_HEIGHT, IMG_WIDTH, 3))
-    encoder = tf.keras.models.Sequential()
-    encoder.add(tf.keras.layers.Conv2D(32, (3, 3), padding='same', activation='relu', input_shape=(IMG_HEIGHT, IMG_WIDTH, 3)))
-    encoder.add(tf.keras.layers.MaxPooling2D((2, 2)))
-    encoder.add(tf.keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu'))
+    encoder = tf.keras.applications.ResNet50V2(
+        include_top=False, input_shape=(IMG_HEIGHT, IMG_WIDTH, 3))
+    encoder.trainable = not freeze
+    # encoder = tf.keras.models.Sequential()
+    # encoder.add(tf.keras.layers.Conv2D(32, (3, 3), padding='same', activation='relu'))
     # encoder.add(tf.keras.layers.MaxPooling2D((2, 2)))
     # encoder.add(tf.keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu'))
-    encoder.add(tf.keras.layers.Flatten())
-    encoder.add(tf.keras.layers.Dense(128, activation='relu'))
-    image_a_features = encoder(inputs[:, 0, ...])
-    image_b_features = encoder(inputs[:, 1, ...])
-    image_c_features = encoder(inputs[:, 2, ...])
+    # encoder.add(tf.keras.layers.MaxPooling2D((2, 2)))
+    # encoder.add(tf.keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu'))
+    # encoder.add(tf.keras.layers.Flatten())
+    # tf.keras.layers.GlobalAveragePooling2D()
+    # encoder.add(tf.keras.layers.Dense(128, activation='relu'))
+    global_average = tf.keras.layers.GlobalAveragePooling2D()
+    image_a_features = global_average(encoder(inputs[:, 0, ...]))
+    image_b_features = global_average(encoder(inputs[:, 1, ...]))
+    image_c_features = global_average(encoder(inputs[:, 2, ...]))
     distance_ab = tf.math.abs(image_a_features - image_b_features)
     distance_ac = tf.math.abs(image_a_features - image_c_features)
     final_logits = tf.keras.layers.Dense(1)(distance_ac - distance_ab)
@@ -110,7 +115,7 @@ def main():
     model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
                   loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
                   metrics=['accuracy'])
-    train_dataset = train_dataset.shuffle(1024).batch(args.batch_size)
+    train_dataset = train_dataset.shuffle(1024).batch(args.batch_size).repeat()
     val_dataset = val_dataset.batch(args.batch_size)
     image, label = next(iter(train_dataset))
     show_batch(image.numpy(), label.numpy())
