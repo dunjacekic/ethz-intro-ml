@@ -4,15 +4,15 @@ import os
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 
-IMG_WIDTH = 32
-IMG_HEIGHT = 32
+IMG_WIDTH = 128
+IMG_HEIGHT = 128
 
 
 def load_image(img):
     img = tf.image.decode_jpeg(img, channels=3)
     img = tf.cast(img, tf.float32)
+    img = img / 255.0
     img = tf.image.resize(img, (IMG_HEIGHT, IMG_WIDTH))
-    img = tf.keras.applications.resnet_v2.preprocess_input(img)
     return img
 
 
@@ -25,25 +25,18 @@ def load_triplets(triplet):
 
 
 def create_model(freeze=True):
-    resnet_weights_path = 'resnet50v2_weights_tf_dim_ordering_tf_kernels_notop.h5'
     inputs = tf.keras.Input(shape=(3, IMG_HEIGHT, IMG_WIDTH, 3))
-    encoder = tf.keras.applications.ResNet50V2(
-        include_top=False, input_shape=(IMG_HEIGHT, IMG_WIDTH, 3),
-        weights=resnet_weights_path)
-    encoder.trainable = not freeze
-    # encoder = tf.keras.models.Sequential()
-    # encoder.add(tf.keras.layers.Conv2D(32, (3, 3), padding='same', activation='relu'))
-    # encoder.add(tf.keras.layers.MaxPooling2D((2, 2)))
-    # encoder.add(tf.keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu'))
-    # encoder.add(tf.keras.layers.MaxPooling2D((2, 2)))
-    # encoder.add(tf.keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu'))
-    # encoder.add(tf.keras.layers.Flatten())
-    # tf.keras.layers.GlobalAveragePooling2D()
-    # encoder.add(tf.keras.layers.Dense(128, activation='relu'))
-    global_average = tf.keras.layers.GlobalAveragePooling2D()
-    image_a_features = global_average(encoder(inputs[:, 0, ...]))
-    image_b_features = global_average(encoder(inputs[:, 1, ...]))
-    image_c_features = global_average(encoder(inputs[:, 2, ...]))
+    encoder = tf.keras.models.Sequential()
+    encoder.add(tf.keras.layers.Conv2D(32, (3, 3), padding='same', activation='relu'))
+    encoder.add(tf.keras.layers.MaxPooling2D((2, 2)))
+    encoder.add(tf.keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu'))
+    encoder.add(tf.keras.layers.MaxPooling2D((2, 2)))
+    encoder.add(tf.keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu'))
+    encoder.add(tf.keras.layers.GlobalAveragePooling2D())
+    encoder.add(tf.keras.layers.Dense(128, activation='relu'))
+    image_a_features = encoder(inputs[:, 0, ...])
+    image_b_features = encoder(inputs[:, 1, ...])
+    image_c_features = encoder(inputs[:, 2, ...])
     distance_ab = tf.math.abs(image_a_features - image_b_features)
     distance_ac = tf.math.abs(image_a_features - image_c_features)
     final_logits = tf.keras.layers.Dense(1)(distance_ac - distance_ab)
