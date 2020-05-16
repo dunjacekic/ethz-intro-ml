@@ -8,6 +8,7 @@ IMG_WIDTH = 96
 IMG_HEIGHT = 96
 
 
+# TODO (yarden): add random transformations and stuff like that.
 def load_image(img):
     img = tf.image.decode_jpeg(img, channels=3)
     img = tf.cast(img, tf.float32)
@@ -16,12 +17,15 @@ def load_image(img):
     return img
 
 
-def load_triplets(triplet):
+def load_triplets(triplet, with_labels):
     ids = tf.strings.split(triplet)
     anchor = load_image(tf.io.read_file('food/' + ids[0] + '.jpg'))
     truthy = load_image(tf.io.read_file('food/' + ids[1] + '.jpg'))
     falsy = load_image(tf.io.read_file('food/' + ids[2] + '.jpg'))
-    return tf.stack([anchor, truthy, falsy], axis=0), 1
+    if with_labels:
+        return tf.stack([anchor, truthy, falsy], axis=0), 1
+    else:
+        return tf.stack([anchor, truthy, falsy], axis=0)
 
 
 def create_model(freeze=True):
@@ -46,12 +50,16 @@ def create_model(freeze=True):
     return triple_siamese
 
 
-def create_inference_model(model):
-    embeddings = model.output
+def compute_distances_from_embeddings(embeddings):
     anchor, truthy, falsy = embeddings[..., 0], embeddings[..., 1], embeddings[..., 2]
     distance_truthy = tf.reduce_sum(tf.square(anchor - truthy), 1)
     distance_falsy = tf.reduce_sum(tf.square(anchor - falsy), 1)
-    predictions = tf.greater_equal(distance_falsy, distance_truthy)
+    return distance_truthy, distance_falsy
+
+
+def create_inference_model(model):
+    distance_truthy, distance_falsy = compute_distances_from_embeddings(model.output)
+    predictions = tf.cast(tf.greater_equal(distance_falsy, distance_truthy), tf.int8)
     return tf.keras.Model(inputs=model.inputs, outputs=predictions)
 
 
@@ -69,27 +77,47 @@ def make_training_labels():
     return len(train_samples)
 
 
-def make_dataset(dataset_filename):
+def make_dataset(dataset_filename, with_labels=True):
     dataset = tf.data.TextLineDataset(
         dataset_filename
     )
     dataset = dataset.map(
-        load_triplets,
+        lambda triplet: load_triplets(triplet, with_labels),
         num_parallel_calls=tf.data.experimental.AUTOTUNE)
     return dataset
 
 
+def plot_history(history):
+    acc = history.history['accuracy']
+    val_acc = history.history['val_accuracy']
+    loss = history.history['loss']
+    val_loss = history.history['val_loss']
+    plt.figure(figsize=(8, 8))
+    plt.subplot(2, 1, 1)
+    plt.plot(acc, label='Training Accuracy')
+    plt.plot(val_acc, label='Validation Accuracy')
+    plt.legend(loc='lower right')
+    plt.ylabel('Accuracy')
+    plt.ylim([min(plt.ylim()), 1])
+    plt.title('Training and Validation Accuracy')
+    plt.subplot(2, 1, 2)
+    plt.plot(loss, label='Training Loss')
+    plt.plot(val_loss, label='Validation Loss')
+    plt.legend(loc='upper right')
+    plt.ylabel('Cross Entropy')
+    plt.ylim([0, 1.0])
+    plt.title('Training and Validation Loss')
+    plt.xlabel('epoch')
+    plt.show()
+
+
 def triplet_loss(_, embeddings):
-    anchor, truthy, falsy = embeddings[..., 0], embeddings[..., 1], embeddings[..., 2]
-    distance_truthy = tf.reduce_sum(tf.square(anchor - truthy), 1)
-    distance_falsy = tf.reduce_sum(tf.square(anchor - falsy), 1)
+    distance_truthy, distance_falsy = compute_distances_from_embeddings(embeddings)
     return tf.reduce_mean(tf.math.softplus(distance_truthy - distance_falsy))
 
 
 def accuracy(_, embeddings):
-    anchor, truthy, falsy = embeddings[..., 0], embeddings[..., 1], embeddings[..., 2]
-    distance_truthy = tf.reduce_sum(tf.square(anchor - truthy), 1)
-    distance_falsy = tf.reduce_sum(tf.square(anchor - falsy), 1)
+    distance_truthy, distance_falsy = compute_distances_from_embeddings(embeddings)
     return tf.reduce_mean(
         tf.cast(tf.greater_equal(distance_falsy, distance_truthy), tf.float32))
 
@@ -98,7 +126,9 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=10)
-    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--train_batch_size', type=int, default=32)
+    parser.add_argument('--inference_batch_size', type=int, default=256)
+    parser.add_argument('--draw_results', type=bool, default=False)
     args = parser.parse_args()
     num_train_samples = make_training_labels()
     train_dataset = make_dataset('train_samples.txt')
@@ -107,18 +137,28 @@ def main():
     model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
                   loss=triplet_loss,
                   metrics=[accuracy])
-    train_dataset = train_dataset.shuffle(1024).batch(args.batch_size).repeat()
-    val_dataset = val_dataset.batch(args.batch_size)
+    train_dataset = train_dataset.shuffle(1024, reshuffle_each_iteration=True) \
+        .batch(args.train_batch_size).repeat()
+    val_dataset = val_dataset.batch(args.train_batch_size)
+    int(np.ceil(num_train_samples / args.train_batch_size))
     history = model.fit(
         train_dataset,
-        steps_per_epoch=num_train_samples // args.batch_size,
+        steps_per_epoch=1,
         epochs=args.epochs,
         validation_data=val_dataset,
         validation_steps=10
     )
-    test_dataset = make_dataset('test_triplets.txt')
+    if args.draw_results:
+        plot_history(history)
+    test_dataset = make_dataset('test_triplets.txt', with_labels=False) \
+        .batch(args.inference_batch_size).prefetch(2)
     inference_model = create_inference_model(model)
-    predictions = inference_model.predict(test_dataset)
+    num_test_samples = 59544
+    predictions = inference_model.predict(
+        test_dataset,
+        steps=int(np.ceil(num_test_samples / args.inference_batch_size)),
+        verbose=1)
+    np.savetxt('predictions.txt', predictions, fmt='%i')
 
 
 if __name__ == '__main__':
