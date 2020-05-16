@@ -4,15 +4,16 @@ import os
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 
-IMG_WIDTH = 100
-IMG_HEIGHT = 100
+IMG_WIDTH = 96
+IMG_HEIGHT = 96
 
 
 def load_image(img):
     img = tf.image.decode_jpeg(img, channels=3)
     img = tf.cast(img, tf.float32)
+    img = img / 127.5 - 1
     img = tf.image.resize(img, (IMG_HEIGHT, IMG_WIDTH))
-    img = tf.keras.applications.resnet_v2.preprocess_input(img)
+    # img = tf.keras.applications.resnet_v2.preprocess_input(img)
     return img
 
 
@@ -25,20 +26,23 @@ def load_triplets(triplet):
 
 
 def create_model(freeze=True):
-    resnet_weights_path = 'resnet50v2_weights_tf_dim_ordering_tf_kernels_notop.h5'
+    # resnet_weights_path = 'resnet50v2_weights_tf_dim_ordering_tf_kernels_notop.h5'
     inputs = tf.keras.Input(shape=(3, IMG_HEIGHT, IMG_WIDTH, 3))
-    encoder = tf.keras.applications.ResNet50V2(
-        include_top=False, input_shape=(IMG_HEIGHT, IMG_WIDTH, 3),
-        weights=resnet_weights_path)
+    # encoder = tf.keras.applications.ResNet50V2(
+    #     include_top=False, input_shape=(IMG_HEIGHT, IMG_WIDTH, 3),
+    #     weights=resnet_weights_path)
+    encoder = tf.keras.applications.MobileNetV2(
+        include_top=False, input_shape=(IMG_HEIGHT, IMG_WIDTH, 3))
+    encoder.summary()
     encoder.trainable = not freeze
-    encoder_layer = encoder.get_layer('conv2_block3_out')
+    # encoder_layer = encoder.get_layer('conv2_block3_out')
     decoder = tf.keras.Sequential([
         tf.keras.layers.GlobalAveragePooling2D(),
         tf.keras.layers.Dense(128),
         tf.keras.layers.Lambda(
             lambda t: tf.math.l2_normalize(t, axis=1))
     ])
-    encoder_intermediate = tf.keras.Model(inputs=encoder.input, outputs=encoder_layer.output)
+    encoder_intermediate = tf.keras.Model(inputs=encoder.input, outputs=encoder.output)
     anchor, truthy, falsy = inputs[:, 0, ...], inputs[:, 1, ...], inputs[:, 2, ...]
     anchor_features = decoder(encoder_intermediate(anchor))
     truthy_features = decoder(encoder_intermediate(truthy))
@@ -67,7 +71,7 @@ def triplet_loss(_, embeddings):
     anchor, truthy, falsy = embeddings[..., 0], embeddings[..., 1], embeddings[..., 2]
     distance_truthy = tf.reduce_sum(tf.square(anchor - truthy), 1)
     distance_falsy = tf.reduce_sum(tf.square(anchor - falsy), 1)
-    return tf.reduce_mean(tf.maximum(distance_truthy - distance_falsy + 2.0, 0.0))
+    return tf.reduce_mean(tf.math.softplus(distance_truthy - distance_falsy))
 
 
 def accuracy(_, embeddings):
