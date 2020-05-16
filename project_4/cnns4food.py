@@ -8,21 +8,23 @@ IMG_WIDTH = 96
 IMG_HEIGHT = 96
 
 
-# TODO (yarden): add random transformations and stuff like that.
-def load_image(img):
+def load_image(img, training):
     img = tf.image.decode_jpeg(img, channels=3)
     img = tf.cast(img, tf.float32)
     img = img / 127.5 - 1
     img = tf.image.resize(img, (IMG_HEIGHT, IMG_WIDTH))
+    if training:
+        img = tf.image.random_flip_left_right(img)
+        img = tf.image.random_flip_up_down(img)
     return img
 
 
-def load_triplets(triplet, with_labels):
+def load_triplets(triplet, training):
     ids = tf.strings.split(triplet)
-    anchor = load_image(tf.io.read_file('food/' + ids[0] + '.jpg'))
-    truthy = load_image(tf.io.read_file('food/' + ids[1] + '.jpg'))
-    falsy = load_image(tf.io.read_file('food/' + ids[2] + '.jpg'))
-    if with_labels:
+    anchor = load_image(tf.io.read_file('food/' + ids[0] + '.jpg'), training)
+    truthy = load_image(tf.io.read_file('food/' + ids[1] + '.jpg'), training)
+    falsy = load_image(tf.io.read_file('food/' + ids[2] + '.jpg'), training)
+    if training:
         return tf.stack([anchor, truthy, falsy], axis=0), 1
     else:
         return tf.stack([anchor, truthy, falsy], axis=0)
@@ -50,17 +52,17 @@ def create_model(freeze=True):
     return triple_siamese
 
 
+def create_inference_model(model):
+    distance_truthy, distance_falsy = compute_distances_from_embeddings(model.output)
+    predictions = tf.cast(tf.greater_equal(distance_falsy, distance_truthy), tf.int8)
+    return tf.keras.Model(inputs=model.inputs, outputs=predictions)
+
+
 def compute_distances_from_embeddings(embeddings):
     anchor, truthy, falsy = embeddings[..., 0], embeddings[..., 1], embeddings[..., 2]
     distance_truthy = tf.reduce_sum(tf.square(anchor - truthy), 1)
     distance_falsy = tf.reduce_sum(tf.square(anchor - falsy), 1)
     return distance_truthy, distance_falsy
-
-
-def create_inference_model(model):
-    distance_truthy, distance_falsy = compute_distances_from_embeddings(model.output)
-    predictions = tf.cast(tf.greater_equal(distance_falsy, distance_truthy), tf.int8)
-    return tf.keras.Model(inputs=model.inputs, outputs=predictions)
 
 
 def make_training_labels():
@@ -77,10 +79,10 @@ def make_training_labels():
     return len(train_samples)
 
 
-def make_dataset(dataset_filename, with_labels=True):
+def make_dataset(dataset_filename, training=True):
     dataset = tf.data.TextLineDataset(dataset_filename)
     dataset = dataset.map(
-        lambda triplet: load_triplets(triplet, with_labels),
+        lambda triplet: load_triplets(triplet, training),
         num_parallel_calls=tf.data.experimental.AUTOTUNE)
     return dataset
 
@@ -158,7 +160,7 @@ def main():
                   loss=triplet_loss,
                   metrics=[accuracy])
     train_dataset = train_dataset.shuffle(1024, reshuffle_each_iteration=True) \
-        .batch(args.train_batch_size).repeat()
+        .repeat().batch(args.train_batch_size)
     val_dataset = val_dataset.batch(args.train_batch_size)
     history = model.fit(
         train_dataset,
@@ -167,7 +169,7 @@ def main():
         validation_data=val_dataset,
         validation_steps=10
     )
-    test_dataset = make_dataset('test_triplets.txt', with_labels=False) \
+    test_dataset = make_dataset('test_triplets.txt', training=False) \
         .batch(args.inference_batch_size).prefetch(2)
     inference_model = create_inference_model(model)
     num_test_samples = 59544
