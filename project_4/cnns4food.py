@@ -78,9 +78,7 @@ def make_training_labels():
 
 
 def make_dataset(dataset_filename, with_labels=True):
-    dataset = tf.data.TextLineDataset(
-        dataset_filename
-    )
+    dataset = tf.data.TextLineDataset(dataset_filename)
     dataset = dataset.map(
         lambda triplet: load_triplets(triplet, with_labels),
         num_parallel_calls=tf.data.experimental.AUTOTUNE)
@@ -108,6 +106,28 @@ def plot_history(history):
     plt.ylim([0, 1.0])
     plt.title('Training and Validation Loss')
     plt.xlabel('epoch')
+    plt.show()
+
+
+def show_batch(image_batch, label_batch):
+    plt.figure(figsize=(3, 6))
+    samples_idx = np.random.randint(image_batch.shape[0], size=4)
+    for i in range(4):
+        anchor, truthy, falsy = image_batch[samples_idx[i], ...]
+        ax = plt.subplot(4, 3, 3 * i + 1)
+        plt.imshow((anchor + 1.0) / 2.0)
+        ax.get_xaxis().set_ticks([])
+        ax.get_yaxis().set_ticks([])
+        ax.set_ylabel(int(label_batch[samples_idx[i], ...]))
+        ax = plt.subplot(4, 3, 3 * i + 2)
+        plt.imshow((truthy + 1.0) / 2.0)
+        ax.get_xaxis().set_ticks([])
+        ax.get_yaxis().set_ticks([])
+        ax = plt.subplot(4, 3, 3 * i + 3)
+        plt.imshow((falsy + 1.0) / 2.0)
+        ax.get_xaxis().set_ticks([])
+        ax.get_yaxis().set_ticks([])
+    plt.tight_layout()
     plt.show()
 
 
@@ -140,16 +160,13 @@ def main():
     train_dataset = train_dataset.shuffle(1024, reshuffle_each_iteration=True) \
         .batch(args.train_batch_size).repeat()
     val_dataset = val_dataset.batch(args.train_batch_size)
-    int(np.ceil(num_train_samples / args.train_batch_size))
     history = model.fit(
         train_dataset,
-        steps_per_epoch=1,
+        steps_per_epoch=int(np.ceil(num_train_samples / args.train_batch_size)),
         epochs=args.epochs,
         validation_data=val_dataset,
         validation_steps=10
     )
-    if args.draw_results:
-        plot_history(history)
     test_dataset = make_dataset('test_triplets.txt', with_labels=False) \
         .batch(args.inference_batch_size).prefetch(2)
     inference_model = create_inference_model(model)
@@ -159,6 +176,13 @@ def main():
         steps=int(np.ceil(num_test_samples / args.inference_batch_size)),
         verbose=1)
     np.savetxt('predictions.txt', predictions, fmt='%i')
+    if args.draw_results:
+        plot_history(history)
+        predictions_dataset = tf.data.TextLineDataset('predictions.txt').map(lambda t: int(t)).batch(
+            args.inference_batch_size)
+        test_with_predictions = tf.data.Dataset.zip((test_dataset, predictions_dataset))
+        images_ids, labels = next(iter(test_with_predictions))
+        show_batch(images_ids.numpy(), labels.numpy())
 
 
 if __name__ == '__main__':
