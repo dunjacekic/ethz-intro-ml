@@ -13,7 +13,6 @@ def load_image(img):
     img = tf.cast(img, tf.float32)
     img = img / 127.5 - 1
     img = tf.image.resize(img, (IMG_HEIGHT, IMG_WIDTH))
-    # img = tf.keras.applications.resnet_v2.preprocess_input(img)
     return img
 
 
@@ -26,31 +25,34 @@ def load_triplets(triplet):
 
 
 def create_model(freeze=True):
-    # resnet_weights_path = 'resnet50v2_weights_tf_dim_ordering_tf_kernels_notop.h5'
+    # mobilenet_weights_path = 'resnet50v2_weights_tf_dim_ordering_tf_kernels_notop.h5'
     inputs = tf.keras.Input(shape=(3, IMG_HEIGHT, IMG_WIDTH, 3))
-    # encoder = tf.keras.applications.ResNet50V2(
-    #     include_top=False, input_shape=(IMG_HEIGHT, IMG_WIDTH, 3),
-    #     weights=resnet_weights_path)
     encoder = tf.keras.applications.MobileNetV2(
         include_top=False, input_shape=(IMG_HEIGHT, IMG_WIDTH, 3))
-    encoder.summary()
     encoder.trainable = not freeze
-    # encoder_layer = encoder.get_layer('conv2_block3_out')
     decoder = tf.keras.Sequential([
         tf.keras.layers.GlobalAveragePooling2D(),
         tf.keras.layers.Dense(128),
         tf.keras.layers.Lambda(
             lambda t: tf.math.l2_normalize(t, axis=1))
     ])
-    encoder_intermediate = tf.keras.Model(inputs=encoder.input, outputs=encoder.output)
     anchor, truthy, falsy = inputs[:, 0, ...], inputs[:, 1, ...], inputs[:, 2, ...]
-    anchor_features = decoder(encoder_intermediate(anchor))
-    truthy_features = decoder(encoder_intermediate(truthy))
-    falsy_features = decoder(encoder_intermediate(falsy))
+    anchor_features = decoder(encoder(anchor))
+    truthy_features = decoder(encoder(truthy))
+    falsy_features = decoder(encoder(falsy))
     embeddings = tf.stack([anchor_features, truthy_features, falsy_features], axis=-1)
     triple_siamese = tf.keras.Model(inputs=inputs, outputs=embeddings)
     triple_siamese.summary()
     return triple_siamese
+
+
+def create_inference_model(model):
+    embeddings = model.output
+    anchor, truthy, falsy = embeddings[..., 0], embeddings[..., 1], embeddings[..., 2]
+    distance_truthy = tf.reduce_sum(tf.square(anchor - truthy), 1)
+    distance_falsy = tf.reduce_sum(tf.square(anchor - falsy), 1)
+    predictions = tf.greater_equal(distance_falsy, distance_truthy)
+    return tf.keras.Model(inputs=model.inputs, outputs=predictions)
 
 
 def make_training_labels():
@@ -65,6 +67,16 @@ def make_training_labels():
         for item in train_samples:
             file.write(item)
     return len(train_samples)
+
+
+def make_dataset(dataset_filename):
+    dataset = tf.data.TextLineDataset(
+        dataset_filename
+    )
+    dataset = dataset.map(
+        load_triplets,
+        num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    return dataset
 
 
 def triplet_loss(_, embeddings):
@@ -89,18 +101,8 @@ def main():
     parser.add_argument('--batch_size', type=int, default=32)
     args = parser.parse_args()
     num_train_samples = make_training_labels()
-    train_dataset = tf.data.TextLineDataset(
-        'train_samples.txt'
-    )
-    train_dataset = train_dataset.map(
-        load_triplets,
-        num_parallel_calls=tf.data.experimental.AUTOTUNE)
-    val_dataset = tf.data.TextLineDataset(
-        'val_samples.txt'
-    )
-    val_dataset = val_dataset.map(
-        load_triplets,
-        num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    train_dataset = make_dataset('train_samples.txt')
+    val_dataset = make_dataset('val_samples.txt')
     model = create_model()
     model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
                   loss=triplet_loss,
@@ -114,6 +116,9 @@ def main():
         validation_data=val_dataset,
         validation_steps=10
     )
+    test_dataset = make_dataset('test_triplets.txt')
+    inference_model = create_inference_model(model)
+    predictions = inference_model.predict(test_dataset)
 
 
 if __name__ == '__main__':
