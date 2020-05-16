@@ -4,8 +4,8 @@ import os
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 
-IMG_WIDTH = 48
-IMG_HEIGHT = 48
+IMG_WIDTH = 100
+IMG_HEIGHT = 100
 
 
 def load_image(img):
@@ -21,7 +21,7 @@ def load_triplets(triplet):
     anchor = load_image(tf.io.read_file('food/' + ids[0] + '.jpg'))
     truthy = load_image(tf.io.read_file('food/' + ids[1] + '.jpg'))
     falsy = load_image(tf.io.read_file('food/' + ids[2] + '.jpg'))
-    return tf.stack([anchor, truthy, falsy], axis=0), [1, 1, 0]
+    return tf.stack([anchor, truthy, falsy], axis=0), 1
 
 
 def create_model(freeze=True):
@@ -31,10 +31,12 @@ def create_model(freeze=True):
         include_top=False, input_shape=(IMG_HEIGHT, IMG_WIDTH, 3),
         weights=resnet_weights_path)
     encoder.trainable = not freeze
-    encoder_layer = encoder.get_layer('conv3_block3_out')
+    encoder_layer = encoder.get_layer('conv2_block3_out')
     decoder = tf.keras.Sequential([
         tf.keras.layers.GlobalAveragePooling2D(),
-        tf.keras.layers.Dense(256, activation='relu')
+        tf.keras.layers.Dense(128),
+        tf.keras.layers.Lambda(
+            lambda t: tf.math.l2_normalize(t, axis=1))
     ])
     encoder_intermediate = tf.keras.Model(inputs=encoder.input, outputs=encoder_layer.output)
     anchor, truthy, falsy = inputs[:, 0, ...], inputs[:, 1, ...], inputs[:, 2, ...]
@@ -65,10 +67,15 @@ def triplet_loss(_, embeddings):
     anchor, truthy, falsy = embeddings[..., 0], embeddings[..., 1], embeddings[..., 2]
     distance_truthy = tf.reduce_sum(tf.square(anchor - truthy), 1)
     distance_falsy = tf.reduce_sum(tf.square(anchor - falsy), 1)
-    return tf.reduce_mean(tf.maximum(distance_truthy - distance_falsy + 1.0, 0.0))
+    return tf.reduce_mean(tf.maximum(distance_truthy - distance_falsy + 2.0, 0.0))
 
-def infer(embeddings):
+
+def accuracy(_, embeddings):
     anchor, truthy, falsy = embeddings[..., 0], embeddings[..., 1], embeddings[..., 2]
+    distance_truthy = tf.reduce_sum(tf.square(anchor - truthy), 1)
+    distance_falsy = tf.reduce_sum(tf.square(anchor - falsy), 1)
+    return tf.reduce_mean(
+        tf.cast(tf.greater_equal(distance_falsy, distance_truthy), tf.float32))
 
 
 def main():
@@ -91,16 +98,17 @@ def main():
         load_triplets,
         num_parallel_calls=tf.data.experimental.AUTOTUNE)
     model = create_model()
-    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.00001),
-                  loss=triplet_loss)
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+                  loss=triplet_loss,
+                  metrics=[accuracy])
     train_dataset = train_dataset.shuffle(1024).batch(args.batch_size).repeat()
     val_dataset = val_dataset.batch(args.batch_size)
     history = model.fit(
         train_dataset,
         steps_per_epoch=num_train_samples // args.batch_size,
         epochs=args.epochs,
-        # validation_data=val_dataset,
-        # validation_steps=50
+        validation_data=val_dataset,
+        validation_steps=10
     )
 
 
