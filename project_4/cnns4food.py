@@ -8,14 +8,37 @@ IMG_WIDTH = 96
 IMG_HEIGHT = 96
 
 
+# TODOs (yarden):
+# - [ ] SGD vs. ADAM + learning rates.
+# - [ ] Different layers (mixed3, mixed7).
+# - [ ] Different encoders.
+# - [ ] Different image size.
+# - [x] More augmentation. (seems like it's working)
+# - [ ] Train on everything.
+
 def load_image(img, training):
     img = tf.image.decode_jpeg(img, channels=3)
     img = tf.cast(img, tf.float32)
-    img = img / 127.5 - 1
+    img = tf.keras.applications.mobilenet_v2.preprocess_input(img)
     img = tf.image.resize(img, (IMG_HEIGHT, IMG_WIDTH))
     if training:
-        img = tf.image.random_flip_left_right(img)
-        img = tf.image.random_flip_up_down(img)
+        # https://www.tensorflow.org/guide/data ("applying arbitrary python logic")
+        img_shape = img.shape
+        [img, ] = tf.py_function(augmentation, [img], [tf.float32])
+        img.set_shape(img_shape)
+    return img
+
+
+def augmentation(img):
+    img = img.numpy()
+    img = tf.keras.preprocessing.image.random_rotation(img, 20, row_axis=0,
+                                                       col_axis=1, channel_axis=2)
+    img = tf.keras.preprocessing.image.random_shear(img, 0.2, row_axis=0, col_axis=1,
+                                                    channel_axis=2)
+    img = tf.keras.preprocessing.image.random_shift(img, 0.2, 0.2, row_axis=0, col_axis=1,
+                                                    channel_axis=2)
+    img = tf.keras.preprocessing.image.random_zoom(img, (0.9, 0.9), row_axis=0, col_axis=1,
+                                                   channel_axis=2)
     return img
 
 
@@ -36,6 +59,10 @@ def create_model(freeze=True):
     encoder = tf.keras.applications.MobileNetV2(
         include_top=False, input_shape=(IMG_HEIGHT, IMG_WIDTH, 3))
     encoder.trainable = not freeze
+    encoder.summary()
+    # layer = encoder.get_layer('mixed7')
+    # intermediate = tf.keras.Model(inputs=encoder.inputs, outputs=layer.output)
+    # intermediate.trainable = not freeze
     decoder = tf.keras.Sequential([
         tf.keras.layers.GlobalAveragePooling2D(),
         tf.keras.layers.Dense(128),
@@ -76,7 +103,7 @@ def make_training_labels():
     with open('train_samples.txt', 'w') as file:
         for item in train_samples:
             file.write(item)
-    return len(train_samples)
+    return len(train_samples), len(val_samples)
 
 
 def make_dataset(dataset_filename, training=True):
@@ -104,8 +131,7 @@ def plot_history(history):
     plt.plot(loss, label='Training Loss')
     plt.plot(val_loss, label='Validation Loss')
     plt.legend(loc='upper right')
-    plt.ylabel('Cross Entropy')
-    plt.ylim([0, 1.0])
+    plt.ylabel('Triplet loss')
     plt.title('Training and Validation Loss')
     plt.xlabel('epoch')
     plt.show()
@@ -135,7 +161,7 @@ def show_batch(image_batch, label_batch):
 
 def triplet_loss(_, embeddings):
     distance_truthy, distance_falsy = compute_distances_from_embeddings(embeddings)
-    return tf.reduce_mean(tf.math.softplus(distance_truthy - distance_falsy))
+    return tf.reduce_mean(tf.math.softplus(distance_truthy - distance_falsy + 0.99))
 
 
 def accuracy(_, embeddings):
@@ -150,9 +176,9 @@ def main():
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--train_batch_size', type=int, default=32)
     parser.add_argument('--inference_batch_size', type=int, default=256)
-    parser.add_argument('--draw_results', type=bool, default=False)
+    parser.add_argument('--draw_results', action='store_true', default=False)
     args = parser.parse_args()
-    num_train_samples = make_training_labels()
+    num_train_samples, num_val_samples = make_training_labels()
     train_dataset = make_dataset('train_samples.txt')
     val_dataset = make_dataset('val_samples.txt')
     model = create_model()
@@ -161,10 +187,10 @@ def main():
                   metrics=[accuracy])
     train_dataset = train_dataset.shuffle(1024, reshuffle_each_iteration=True) \
         .repeat().batch(args.train_batch_size)
-    val_dataset = val_dataset.batch(args.train_batch_size)
+    val_dataset = val_dataset.shuffle(1024).batch(args.train_batch_size)
     history = model.fit(
         train_dataset,
-        steps_per_epoch=int(np.ceil(num_train_samples / args.train_batch_size)),
+        steps_per_epoch=int(np.ceil(num_train_samples / args.train_batch_size / 5)),
         epochs=args.epochs,
         validation_data=val_dataset,
         validation_steps=10
