@@ -54,15 +54,10 @@ def load_triplets(triplet, training):
 
 
 def create_model(freeze=True):
-    # mobilenet_weights_path = 'resnet50v2_weights_tf_dim_ordering_tf_kernels_notop.h5'
     inputs = tf.keras.Input(shape=(3, IMG_HEIGHT, IMG_WIDTH, 3))
     encoder = tf.keras.applications.MobileNetV2(
         include_top=False, input_shape=(IMG_HEIGHT, IMG_WIDTH, 3))
     encoder.trainable = not freeze
-    encoder.summary()
-    # layer = encoder.get_layer('mixed7')
-    # intermediate = tf.keras.Model(inputs=encoder.inputs, outputs=layer.output)
-    # intermediate.trainable = not freeze
     decoder = tf.keras.Sequential([
         tf.keras.layers.GlobalAveragePooling2D(),
         tf.keras.layers.Dense(128),
@@ -110,7 +105,7 @@ def make_dataset(dataset_filename, batch_size, shuffle_buffer_size=None, trainin
     dataset = tf.data.TextLineDataset(dataset_filename)
     if training:
         assert shuffle_buffer_size is not None
-        dataset.shuffle(shuffle_buffer_size).repeat()
+        dataset = dataset.shuffle(shuffle_buffer_size).repeat()
     dataset = dataset.map(
         lambda triplet: load_triplets(triplet, training),
         num_parallel_calls=tf.data.experimental.AUTOTUNE)
