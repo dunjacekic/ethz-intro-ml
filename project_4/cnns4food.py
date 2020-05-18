@@ -106,11 +106,15 @@ def make_training_labels():
     return len(train_samples), len(val_samples)
 
 
-def make_dataset(dataset_filename, training=True):
+def make_dataset(dataset_filename, batch_size, shuffle_buffer_size=None, training=True):
     dataset = tf.data.TextLineDataset(dataset_filename)
+    if training:
+        assert shuffle_buffer_size is not None
+        dataset.shuffle(shuffle_buffer_size).repeat()
     dataset = dataset.map(
         lambda triplet: load_triplets(triplet, training),
         num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    dataset = dataset.batch(batch_size).prefetch(1)
     return dataset
 
 
@@ -172,6 +176,8 @@ def accuracy(_, embeddings):
 
 def main():
     import argparse
+    tf.random.set_seed(123)
+    np.random.seed(456)
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--train_batch_size', type=int, default=32)
@@ -179,24 +185,25 @@ def main():
     parser.add_argument('--draw_results', action='store_true', default=False)
     args = parser.parse_args()
     num_train_samples, num_val_samples = make_training_labels()
-    train_dataset = make_dataset('train_samples.txt')
-    val_dataset = make_dataset('val_samples.txt')
+    train_dataset = make_dataset(
+        'train_samples.txt',
+        training=True, batch_size=args.train_batch_size, shuffle_buffer_size=num_train_samples)
+    val_dataset = make_dataset(
+        'val_samples.txt',
+        training=True, batch_size=args.inference_batch_size, shuffle_buffer_size=num_val_samples)
     model = create_model()
-    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.05),
                   loss=triplet_loss,
                   metrics=[accuracy])
-    train_dataset = train_dataset.shuffle(1024, reshuffle_each_iteration=True) \
-        .repeat().batch(args.train_batch_size)
-    val_dataset = val_dataset.shuffle(1024).batch(args.train_batch_size)
     history = model.fit(
         train_dataset,
-        steps_per_epoch=int(np.ceil(num_train_samples / args.train_batch_size / 5)),
+        steps_per_epoch=int(np.ceil(num_train_samples / args.train_batch_size)),
         epochs=args.epochs,
         validation_data=val_dataset,
         validation_steps=10
     )
-    test_dataset = make_dataset('test_triplets.txt', training=False) \
-        .batch(args.inference_batch_size).prefetch(2)
+    test_dataset = make_dataset('test_triplets.txt', training=False,
+                                batch_size=args.inference_batch_size)
     inference_model = create_inference_model(model)
     num_test_samples = 59544
     predictions = inference_model.predict(
